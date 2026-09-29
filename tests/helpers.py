@@ -6,6 +6,7 @@ from typing import Any
 
 from service_09252_008.application.booking_service import BookingService
 from service_09252_008.application.catalog_service import CatalogService
+from service_09252_008.application.maintenance_service import MaintenanceService
 from service_09252_008.application.ports import ManualClock, SequentialIdGenerator
 from service_09252_008.persistence.store import InMemoryStore, Store
 
@@ -16,19 +17,59 @@ SLOT_START = "2026-10-01T02:00:00+00:00"
 SLOT_END = "2026-10-01T04:00:00+00:00"
 
 
+def make_maintenance_service(
+    store: Store | None = None,
+    *,
+    now: datetime = NOW,
+    clock: ManualClock | None = None,
+    ids: SequentialIdGenerator | None = None,
+) -> tuple[MaintenanceService, Store]:
+    """构建维护窗口服务（默认独立内存库，与任务状态分库）。"""
+    store = store or InMemoryStore()
+    clock = clock or ManualClock(now)
+    ids = ids or SequentialIdGenerator()
+    return MaintenanceService(store, clock, ids), store
+
+
+def make_services_with_maintenance(
+    *,
+    now: datetime = NOW,
+) -> tuple[CatalogService, BookingService, MaintenanceService, ManualClock, Store, Store]:
+    """构建预约与维护服务对：二者共享同一手动时钟/ID，但存储彼此独立（分库）。"""
+    clock = ManualClock(now)
+    ids = SequentialIdGenerator()
+    booking_store: Store = InMemoryStore()
+    maintenance_store: Store = InMemoryStore()
+    catalog = CatalogService(booking_store, clock, ids)
+    maintenance = MaintenanceService(maintenance_store, clock, ids)
+    bookings = BookingService(booking_store, clock, ids, maintenance=maintenance)
+    return catalog, bookings, maintenance, clock, booking_store, maintenance_store
+
+
 def make_services(
     store: Store | None = None,
     *,
     now: datetime = NOW,
     lock_ttl_seconds: int = 1800,
     quote_ttl_seconds: int = 86400,
+    maintenance: MaintenanceService | None = None,
 ) -> tuple[CatalogService, BookingService, ManualClock, Store]:
-    """构建注入手动时钟与序列 ID 的服务对。"""
+    """构建注入手动时钟与序列 ID 的服务对。
+
+    传入 ``maintenance`` 时，预约申请会受共享工坊维护窗口约束。
+    """
     store = store or InMemoryStore()
     clock = ManualClock(now)
     ids = SequentialIdGenerator()
     catalog = CatalogService(store, clock, ids)
-    bookings = BookingService(store, clock, ids, lock_ttl_seconds=lock_ttl_seconds, quote_ttl_seconds=quote_ttl_seconds)
+    bookings = BookingService(
+        store,
+        clock,
+        ids,
+        lock_ttl_seconds=lock_ttl_seconds,
+        quote_ttl_seconds=quote_ttl_seconds,
+        maintenance=maintenance,
+    )
     return catalog, bookings, clock, store
 
 

@@ -316,6 +316,46 @@ class ReceptionWindow:
         )
 
 
+@dataclass
+class MaintenanceWindow:
+    """共享工坊维护窗口：工坊维护排期，独立于预约任务状态存储。
+
+    发布后仅用于拒绝与其时段重叠的“新预约”；不取消、不删除任何既有任务。
+    """
+
+    maintenance_id: str
+    title: str
+    start: datetime
+    end: datetime
+    created_at: datetime
+    reason: str | None = None
+
+    def overlaps(self, slot_start: datetime, slot_end: datetime) -> bool:
+        """与课程时段是否重叠（半开区间）。"""
+        return self.start < slot_end and slot_start < self.end
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "maintenance_id": self.maintenance_id,
+            "title": self.title,
+            "start": dt_to_str(self.start),
+            "end": dt_to_str(self.end),
+            "created_at": dt_to_str(self.created_at),
+            "reason": self.reason,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MaintenanceWindow":
+        return cls(
+            maintenance_id=data["maintenance_id"],
+            title=data["title"],
+            start=dt_from_str(data["start"]),
+            end=dt_from_str(data["end"]),
+            created_at=dt_from_str(data["created_at"]),
+            reason=data.get("reason"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # 预约及其附属
 # ---------------------------------------------------------------------------

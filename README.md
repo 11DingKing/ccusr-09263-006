@@ -13,6 +13,7 @@ service_09252_008/
 ├── application/       # 应用服务层
 │   ├── ports.py       #   可替换端口：Clock / IdGenerator（测试注入手动时钟与序列 ID）
 │   ├── catalog_service.py  # 目录登记与校验
+│   ├── maintenance_service.py  # 共享工坊维护窗口：发布/查询/新预约准入（独立存储）
 │   └── booking_service.py  # 预约状态机：申请/报价/锁定/改期/发运/到货/签到/结算/取消/恢复
 ├── persistence/       # 持久化层
 │   ├── store.py       #   存储端口 + 内存实现（快照回滚）
@@ -36,6 +37,11 @@ service_09252_008/
   （`non_returnable_leftover`），课中损坏记 `damaged_in_use`。
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
+- **共享工坊维护窗口**：工坊排出维护日历。维护窗口发布后，与其时段重叠的
+  **新预约**被拒绝（`maintenance_blocked`，HTTP 409，硬拒绝、不进候补）；
+  既有/进行中的任务**保持可查询且不被强制删除或改期**，后续报价/锁定/发运等
+  操作也不受影响。维护排期与任务状态**分开存储**（`maintenance.db` 与
+  `booking.db` 两个独立 SQLite 文件），Python API 仅在申请（新预约）入口拒绝。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
 
 ## 运行
@@ -51,7 +57,9 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/packages` `/mentors` `/resources` `/material-batches` `/reception-windows` | 目录登记 |
-| POST | `/bookings` | 申请（需幂等键） |
+| POST | `/maintenance-windows` | 发布共享工坊维护窗口（独立库） |
+| GET  | `/maintenance-windows` `/maintenance-windows/{id}` | 查询维护窗口 |
+| POST | `/bookings` | 申请（需幂等键；命中维护窗口返回 409 `maintenance_blocked`） |
 | POST | `/bookings/{id}/quote` | 报价 |
 | POST | `/bookings/{id}/lock` | 锁定（需幂等键，可带 `ttl_seconds`） |
 | POST | `/bookings/{id}/reschedule` | 改期（发运后拒绝） |
@@ -75,7 +83,8 @@ python3 -m unittest discover -s tests -v
 
 覆盖：主流程端到端、前置培训/容量/安全/互斥/运输周期规则、跨时区、
 幂等重放、并发锁定（内存与 SQLite 双后端）、重启后超时恢复、
-部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界。
+部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界、
+共享工坊维护窗口（拒绝新预约、进行中任务仍可查询、SQLite 双库重启）。
 
 ## 编译检查
 

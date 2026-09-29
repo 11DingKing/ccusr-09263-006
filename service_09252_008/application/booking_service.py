@@ -11,13 +11,14 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import timedelta
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..domain.errors import (
     BookingImmutableError,
     BusinessRuleError,
     ConflictError,
     IdempotencyConflict,
+    MaintenanceBlockedError,
     NotFoundError,
     StateError,
     ValidationError,
@@ -66,6 +67,9 @@ from .catalog_service import (
 )
 from .ports import Clock, IdGenerator
 
+if TYPE_CHECKING:
+    from .maintenance_service import MaintenanceService
+
 COLLECTION_BOOKINGS = "bookings"
 COLLECTION_RESERVATIONS = "material_reservations"
 COLLECTION_SHIPMENTS = "shipments"
@@ -95,12 +99,15 @@ class BookingService:
         *,
         lock_ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
         quote_ttl_seconds: int = DEFAULT_QUOTE_TTL_SECONDS,
+        maintenance: "MaintenanceService | None" = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._ids = ids
         self._lock_ttl = lock_ttl_seconds
         self._quote_ttl = quote_ttl_seconds
+        # 可选：共享工坊维护窗口。注入后仅用于拒绝“新预约”，不影响既有任务。
+        self._maintenance = maintenance
 
     # ------------------------------------------------------------------
     # 基础设施
@@ -263,6 +270,20 @@ class BookingService:
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
         ensure_resource_fit(resource, seats)
+
+        # 共享工坊维护窗口：已发布则硬拒绝重叠的新预约（不进入候补、不写预约）。
+        # 仅此“新预约”入口受限；既有任务的任何后续操作都不检查维护窗口。
+        if self._maintenance is not None:
+            blocking = self._maintenance.find_blocking_window(slot_start, slot_end, at=now)
+            if blocking is not None:
+                raise MaintenanceBlockedError(
+                    "slot overlaps a published shared workshop maintenance window",
+                    details={
+                        "maintenance_id": blocking.maintenance_id,
+                        "window_start": dt_to_str(blocking.start),
+                        "window_end": dt_to_str(blocking.end),
+                    },
+                )
 
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(

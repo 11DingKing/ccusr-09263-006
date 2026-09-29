@@ -8,15 +8,16 @@ import urllib.error
 import urllib.request
 
 from service_09252_008.interfaces.http_api import create_server
-from tests.helpers import make_services, seed_catalog
+from tests.helpers import make_services_with_maintenance, seed_catalog
 
 
 class HttpApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        catalog, bookings, clock, store = make_services()
+        catalog, bookings, maintenance, clock, store, _mstore = make_services_with_maintenance()
+        cls.maintenance = maintenance
         cls.ids = seed_catalog(catalog)
-        cls.server = create_server("127.0.0.1", 0, catalog, bookings)
+        cls.server = create_server("127.0.0.1", 0, catalog, bookings, maintenance)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -111,6 +112,58 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("expired_locks", body)
         self.assertIn("expired_quotes", body)
+
+    def test_maintenance_window_blocks_new_booking_but_keeps_existing(self) -> None:
+        # 既有进行中任务（与下面维护窗口同一时段）
+        live_body = {
+            "institution": "港城理工学院",
+            "package_id": self.ids["package_id"],
+            "mentor_id": self.ids["mentor_id"],
+            "resource_id": self.ids["resource_id"],
+            "window_id": self.ids["window_id"],
+            "seats": 5,
+            "slot_start": "2026-10-01T02:00:00+00:00",
+            "slot_end": "2026-10-01T04:00:00+00:00",
+        }
+        status, live = self._request(
+            "POST", "/bookings", live_body, headers={"Idempotency-Key": "http-maint-live"}
+        )
+        self.assertEqual(status, 201)
+        live_id = live["booking_id"]
+        live_status = live["status"]
+
+        # 发布覆盖该时段的共享工坊维护窗口
+        status, window = self._request(
+            "POST",
+            "/maintenance-windows",
+            {
+                "title": "共享工坊维护窗口",
+                "start": "2026-10-01T01:00:00+00:00",
+                "end": "2026-10-01T05:00:00+00:00",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(window["maintenance_id"])
+
+        # 窗口可查询
+        status, listing = self._request("GET", "/maintenance-windows")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(w["maintenance_id"] == window["maintenance_id"] for w in listing["items"]))
+
+        # 窗口内的新预约被拒绝（409），且不产生新任务
+        blocked_body = {**live_body, "institution": "后到学院"}
+        status, blocked = self._request(
+            "POST", "/bookings", blocked_body, headers={"Idempotency-Key": "http-maint-block"}
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(blocked["error"], "maintenance_blocked")
+        self.assertEqual(blocked["details"]["maintenance_id"], window["maintenance_id"])
+
+        # 既有进行中任务仍可查询、未被删除、状态不变
+        status, fetched = self._request("GET", f"/bookings/{live_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(fetched["booking_id"], live_id)
+        self.assertEqual(fetched["status"], live_status)
 
 
 if __name__ == "__main__":

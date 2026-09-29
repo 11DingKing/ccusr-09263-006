@@ -57,6 +57,12 @@ class IdempotencyConflict(DomainError):
     code = "idempotency_conflict"
 
 
+class MaintenanceBlockedError(ConflictError):
+    """新预约时段落在已发布的共享工坊维护窗口内。"""
+
+    code = "maintenance_blocked"
+
+
 class BookingImmutableError(StateError):
     """预约已不可变更（材料已发运或流程已终结）。"""
 
