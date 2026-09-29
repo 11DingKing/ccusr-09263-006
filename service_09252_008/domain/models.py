@@ -317,6 +317,55 @@ class ReceptionWindow:
 
 
 # ---------------------------------------------------------------------------
+# 共享工坊维护窗口（维护日历）
+# ---------------------------------------------------------------------------
+
+#: 维护窗口管理的统一命名
+MAINTENANCE_TITLE = "共享工坊维护窗口"
+
+
+@dataclass
+class MaintenanceWindow:
+    """共享工坊维护窗口：发布后与其时段重叠的新预约将被拒绝。
+
+    维护窗口与预约状态分开存储：发布维护窗口不会取消或删除任何既有预约，
+    已在进行的任务保持可查询。``resource_id`` 为 ``None`` 表示整个共享工坊
+    范围的维护，否则只针对单个工坊资源。
+    """
+
+    window_id: str
+    start: datetime
+    end: datetime
+    published_at: datetime
+    resource_id: str | None = None
+    title: str = MAINTENANCE_TITLE
+    reason: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "window_id": self.window_id,
+            "resource_id": self.resource_id,
+            "title": self.title,
+            "start": dt_to_str(self.start),
+            "end": dt_to_str(self.end),
+            "reason": self.reason,
+            "published_at": dt_to_str(self.published_at),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MaintenanceWindow":
+        return cls(
+            window_id=data["window_id"],
+            start=dt_from_str(data["start"]),
+            end=dt_from_str(data["end"]),
+            published_at=dt_from_str(data["published_at"]),
+            resource_id=data.get("resource_id"),
+            title=data.get("title", MAINTENANCE_TITLE),
+            reason=data.get("reason"),
+        )
+
+
+# ---------------------------------------------------------------------------
 # 预约及其附属
 # ---------------------------------------------------------------------------
 

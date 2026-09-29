@@ -61,3 +61,9 @@ class BookingImmutableError(StateError):
     """预约已不可变更（材料已发运或流程已终结）。"""
 
     code = "booking_immutable"
+
+
+class MaintenanceBlockedError(ConflictError):
+    """新预约时段与已发布的共享工坊维护窗口重叠。"""
+
+    code = "maintenance_window_blocked"

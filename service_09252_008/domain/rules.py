@@ -11,6 +11,7 @@ from .models import (
     QTY_EPS,
     Booking,
     CoursePackage,
+    MaintenanceWindow,
     MaterialBatch,
     MaterialSafety,
     Mentor,
@@ -188,3 +189,19 @@ def find_resource_conflict(
         if overlaps(candidate.slot_start, candidate.slot_end, other.slot_start, other.slot_end):
             return other
     return None
+
+
+def maintenance_blocks(
+    window: "MaintenanceWindow",
+    slot_start: datetime,
+    slot_end: datetime,
+    resource_id: str,
+) -> bool:
+    """维护窗口是否阻断该资源上的候选时段。
+
+    全工坊范围（``resource_id is None``）的窗口阻断所有资源；
+    资源级窗口只阻断同一资源；时段按半开区间判重。
+    """
+    if window.resource_id is not None and window.resource_id != resource_id:
+        return False
+    return overlaps(slot_start, slot_end, window.start, window.end)

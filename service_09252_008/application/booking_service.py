@@ -18,6 +18,7 @@ from ..domain.errors import (
     BusinessRuleError,
     ConflictError,
     IdempotencyConflict,
+    MaintenanceBlockedError,
     NotFoundError,
     StateError,
     ValidationError,
@@ -95,12 +96,15 @@ class BookingService:
         *,
         lock_ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
         quote_ttl_seconds: int = DEFAULT_QUOTE_TTL_SECONDS,
+        maintenance_schedule: Any | None = None,
     ) -> None:
         self._store = store
         self._clock = clock
         self._ids = ids
         self._lock_ttl = lock_ttl_seconds
         self._quote_ttl = quote_ttl_seconds
+        # 维护日历为只读端口，与任务状态库分开存放；仅用于拒绝新预约。
+        self._maintenance = maintenance_schedule
 
     # ------------------------------------------------------------------
     # 基础设施
@@ -263,6 +267,20 @@ class BookingService:
         ensure_window_fit(window, slot_start, slot_end)
         ensure_mentor_qualified(mentor, package, slot_end)
         ensure_resource_fit(resource, seats)
+
+        # 维护窗口只拒绝“新预约”，不影响既有/进行中任务
+        if self._maintenance is not None:
+            blocking = self._maintenance.find_overlap(slot_start, slot_end, resource.resource_id)
+            if blocking is not None:
+                raise MaintenanceBlockedError(
+                    f"slot overlaps a published maintenance window: {blocking.title}",
+                    details={
+                        "maintenance_window_id": blocking.window_id,
+                        "title": blocking.title,
+                        "maintenance_start": dt_to_str(blocking.start),
+                        "maintenance_end": dt_to_str(blocking.end),
+                    },
+                )
 
         batches = [MaterialBatch.from_dict(b) for b in self._store.query(COLLECTION_BATCHES)]
         plan = plan_material_allocation(

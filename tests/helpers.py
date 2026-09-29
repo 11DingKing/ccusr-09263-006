@@ -6,7 +6,9 @@ from typing import Any
 
 from service_09252_008.application.booking_service import BookingService
 from service_09252_008.application.catalog_service import CatalogService
+from service_09252_008.application.maintenance_service import MaintenanceService
 from service_09252_008.application.ports import ManualClock, SequentialIdGenerator
+from service_09252_008.persistence.maintenance_store import InMemoryMaintenanceSchedule
 from service_09252_008.persistence.store import InMemoryStore, Store
 
 NOW = datetime(2026, 9, 25, 0, 0, 0, tzinfo=timezone.utc)
@@ -135,6 +137,21 @@ def apply_payload(ids: dict[str, Any], key: str, **overrides: Any) -> dict[str, 
     }
     payload.update(overrides)
     return payload
+
+
+def make_services_with_maintenance(
+    *,
+    now: datetime = NOW,
+) -> tuple[CatalogService, BookingService, MaintenanceService, InMemoryMaintenanceSchedule, ManualClock, Store]:
+    """构建任务状态库与维护日历分离的内存服务对。"""
+    store = InMemoryStore()
+    schedule = InMemoryMaintenanceSchedule()
+    clock = ManualClock(now)
+    ids = SequentialIdGenerator()
+    catalog = CatalogService(store, clock, ids)
+    bookings = BookingService(store, clock, ids, maintenance_schedule=schedule)
+    maintenance = MaintenanceService(schedule, clock, ids)
+    return catalog, bookings, maintenance, schedule, clock, store
 
 
 def batch_available(store: Store, batch_id: str) -> float:

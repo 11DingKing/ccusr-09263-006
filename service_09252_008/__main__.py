@@ -2,6 +2,9 @@
 
 运行数据默认落在 ``$SERVICE_09252_008_DATA_DIR`` 或用户状态目录，
 绝不写入源码目录。启动时自动执行超时任务恢复。
+
+维护日历与任务状态分库存放：``booking.db`` 保存预约任务状态，
+``maintenance.db`` 保存共享工坊维护窗口。
 """
 from __future__ import annotations
 
@@ -11,8 +14,10 @@ from pathlib import Path
 
 from .application.booking_service import BookingService
 from .application.catalog_service import CatalogService
+from .application.maintenance_service import MaintenanceService
 from .application.ports import SystemClock, UuidIdGenerator
 from .interfaces.http_api import create_server
+from .persistence.maintenance_store import SQLiteMaintenanceSchedule
 from .persistence.sqlite_store import SQLiteStore
 
 ENV_DATA_DIR = "SERVICE_09252_008_DATA_DIR"
@@ -25,13 +30,17 @@ def default_data_dir() -> Path:
     return Path.home() / ".local" / "state" / "service_09252_008"
 
 
-def build_services(data_dir: Path) -> tuple[CatalogService, BookingService, SQLiteStore]:
+def build_services(
+    data_dir: Path,
+) -> tuple[CatalogService, BookingService, MaintenanceService, SQLiteStore, SQLiteMaintenanceSchedule]:
     store = SQLiteStore(data_dir / "booking.db")
+    maintenance_schedule = SQLiteMaintenanceSchedule(data_dir / "maintenance.db")
     clock = SystemClock()
     ids = UuidIdGenerator()
     catalog = CatalogService(store, clock, ids)
-    bookings = BookingService(store, clock, ids)
-    return catalog, bookings, store
+    bookings = BookingService(store, clock, ids, maintenance_schedule=maintenance_schedule)
+    maintenance = MaintenanceService(maintenance_schedule, clock, ids)
+    return catalog, bookings, maintenance, store, maintenance_schedule
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,11 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_dir = args.data_dir or default_data_dir()
-    catalog, bookings, store = build_services(data_dir)
+    catalog, bookings, maintenance, store, maintenance_schedule = build_services(data_dir)
     recovered = bookings.recover()  # 重启后恢复超时任务
     if recovered["expired_locks"] or recovered["expired_quotes"]:
         print(f"recovered timeouts: {recovered}")
-    server = create_server(args.host, args.port, catalog, bookings)
+    server = create_server(args.host, args.port, catalog, bookings, maintenance)
     print(f"serving on http://{args.host}:{args.port} (data dir: {data_dir})")
     try:
         server.serve_forever()
@@ -55,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         server.server_close()
         store.close()
+        maintenance_schedule.close()
     return 0
 
 

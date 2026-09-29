@@ -19,11 +19,13 @@ from ..application.catalog_service import (
     COLLECTION_WINDOWS,
     CatalogService,
 )
+from ..application.maintenance_service import MaintenanceService
 from ..domain.errors import (
     BusinessRuleError,
     ConflictError,
     DomainError,
     IdempotencyConflict,
+    MaintenanceBlockedError,
     NotFoundError,
     StateError,
     ValidationError,
@@ -36,6 +38,7 @@ _ERROR_STATUS = {
     StateError.code: 409,
     ConflictError.code: 409,
     IdempotencyConflict.code: 409,
+    MaintenanceBlockedError.code: 409,
 }
 
 HandlerFn = Callable[[dict[str, Any], dict[str, str]], Any]
@@ -61,7 +64,11 @@ class _Router:
         return None
 
 
-def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
+def build_router(
+    catalog: CatalogService,
+    bookings: BookingService,
+    maintenance: MaintenanceService | None = None,
+) -> _Router:
     router = _Router()
 
     def with_idempotency_key(payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
@@ -139,6 +146,24 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
     )
     router.add("POST", "/admin/recover", lambda body, hdr: bookings.recover())
     router.add("GET", "/health", lambda body, hdr: {"status": "ok"})
+
+    # 维护日历（与预约状态分开存储；只拦截新预约）
+    if maintenance is not None:
+        router.add(
+            "POST",
+            "/maintenance-windows",
+            lambda body, hdr: maintenance.publish_window(body),
+        )
+        router.add(
+            "GET",
+            "/maintenance-windows",
+            lambda body, hdr: {"items": maintenance.list_windows()},
+        )
+        router.add(
+            "GET",
+            "/maintenance-windows/{window_id}",
+            lambda body, hdr: maintenance.get_window(hdr["__path__"]["window_id"]),
+        )
     return router
 
 
@@ -200,9 +225,10 @@ def create_server(
     port: int,
     catalog: CatalogService,
     bookings: BookingService,
+    maintenance: MaintenanceService | None = None,
 ) -> ThreadingHTTPServer:
     """构建线程化 HTTP 服务（守护线程，随进程退出）。"""
-    router = build_router(catalog, bookings)
+    router = build_router(catalog, bookings, maintenance)
     server = ThreadingHTTPServer((host, port), make_handler_class(router))
     server.daemon_threads = True
     return server

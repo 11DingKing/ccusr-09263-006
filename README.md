@@ -13,10 +13,12 @@ service_09252_008/
 ├── application/       # 应用服务层
 │   ├── ports.py       #   可替换端口：Clock / IdGenerator（测试注入手动时钟与序列 ID）
 │   ├── catalog_service.py  # 目录登记与校验
-│   └── booking_service.py  # 预约状态机：申请/报价/锁定/改期/发运/到货/签到/结算/取消/恢复
+│   ├── booking_service.py  # 预约状态机：申请/报价/锁定/改期/发运/到货/签到/结算/取消/恢复
+│   └── maintenance_service.py # 维护日历：发布“共享工坊维护窗口”
 ├── persistence/       # 持久化层
 │   ├── store.py       #   存储端口 + 内存实现（快照回滚）
-│   └── sqlite_store.py     # SQLite 实现（BEGIN IMMEDIATE，重启可恢复）
+│   ├── sqlite_store.py     # SQLite 实现（BEGIN IMMEDIATE，重启可恢复）
+│   └── maintenance_store.py # 维护日历存储：独立 maintenance.db + 专用表
 └── interfaces/
     └── http_api.py    # 接口边界：HTTP/JSON API（仅标准库）
 ```
@@ -36,6 +38,10 @@ service_09252_008/
   （`non_returnable_leftover`），课中损坏记 `damaged_in_use`。
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
+- **共享工坊维护窗口**：维护日历（`maintenance.db`，专用表）与预约任务状态
+  （`booking.db`）分库存放。窗口发布后，与其时段重叠的**新预约**被拒绝
+  （409 `maintenance_window_blocked`）；已在进行的任务不被取消或删除，
+  仍可正常查询与推进。窗口可全工坊生效或绑定单个工坊资源。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
 
 ## 运行
@@ -61,6 +67,8 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | POST | `/bookings/{id}/checkin` | 签到 |
 | POST | `/bookings/{id}/settle` | 结算（`actual_attendance`、可选 `damaged`） |
 | POST | `/bookings/{id}/cancel` | 取消（释放候补、按规则记损耗） |
+| POST | `/maintenance-windows` | 发布共享工坊维护窗口（窗口内新预约被拒绝） |
+| GET  | `/maintenance-windows` `/maintenance-windows/{id}` | 查询维护日历 |
 | POST | `/admin/recover` | 恢复超时任务 |
 | GET  | `/bookings/{id}` `/health` | 查询 |
 
@@ -75,7 +83,8 @@ python3 -m unittest discover -s tests -v
 
 覆盖：主流程端到端、前置培训/容量/安全/互斥/运输周期规则、跨时区、
 幂等重放、并发锁定（内存与 SQLite 双后端）、重启后超时恢复、
-部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界。
+部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界、
+共享工坊维护窗口（重叠新预约被拒绝、进行中任务仍可查询、维护日历与任务状态分库）。
 
 ## 编译检查
 
